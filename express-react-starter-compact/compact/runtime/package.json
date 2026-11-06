@@ -1,0 +1,8 @@
+{
+  "name": "compact-runtime",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@noble/post-quantum": "^0.5.0"
+  }
+}

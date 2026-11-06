@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "appId": "express-react-starter-59312b",
+  "name": "express-react-starter",
+  "mode": "http",
+  "entry": "server/server.js",
+  "port": 3001,
+  "proxyPrefixes": [
+    "/api"
+  ],
+  "runnerPort": 8787,
+  "source": {
+    "type": "github",
+    "owner": "TK-the-bad-coder",
+    "repo": "express-react-starter",
+    "branch": "master",
+    "sha": "d1b46b087c5f83ea59b0150ba0637edb29703a4f",
+    "subdir": null,
+    "url": "https://github.com/TK-the-bad-coder/express-react-starter"
+  },
+  "createdAt": "2026-11-06T00:04:21.878Z"
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@compact/cli",
+  "version": "0.1.0",
+  "description": "Compact: split a Vite/Node app into a public portal and a critical part hardened for post-quantum use, anchor it on NEAR testnet, push the portal to GitHub.",
+  "type": "module",
+  "bin": { "compact": "bin/compact.mjs" },
+  "main": "src/index.mjs",
+  "exports": { ".": "./src/index.mjs" },
+  "engines": { "node": ">=20" },
+  "files": ["bin", "src", "templates", "README.md"],
+  "scripts": { "test": "node --test" },
+  "dependencies": { "@noble/post-quantum": "^0.5.0" },
+  "license": "MIT"
+}

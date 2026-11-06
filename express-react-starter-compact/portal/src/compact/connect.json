@@ -1,0 +1,19 @@
+{
+  "v": 1,
+  "appId": "express-react-starter-59312b",
+  "mode": "http",
+  "manifestSha256": "2026281b503d27f7e1bcbd005572ed4094b459c0ccf62066eeed2ea790fb003e",
+  "endpoint": "http://localhost:8787",
+  "verify": "strict",
+  "near": {
+    "network": "testnet",
+    "rpcUrls": [
+      "https://test.rpc.fastnear.com",
+      "https://rpc.testnet.near.org"
+    ],
+    "registryAccount": "710e3263748d594c2c1edc57c3ef40c2151a728a46d7453709ecc2d2c0d5467c"
+  },
+  "proxyPrefixes": [
+    "/api"
+  ]
+}
