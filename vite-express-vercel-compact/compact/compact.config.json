@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "appId": "vite-express-vercel-599aac",
+  "name": "vite-express-vercel",
+  "mode": "http",
+  "entry": "server/api/index.ts",
+  "port": 3000,
+  "proxyPrefixes": [
+    "/api"
+  ],
+  "runnerPort": 8787,
+  "source": {
+    "type": "github",
+    "owner": "internetdrew",
+    "repo": "vite-express-vercel",
+    "branch": "main",
+    "sha": "a1723243f54e7750acd973134e24296b2bd46405",
+    "subdir": null,
+    "url": "https://github.com/internetdrew/vite-express-vercel"
+  },
+  "createdAt": "2026-11-08T23:30:46.582Z"
+}

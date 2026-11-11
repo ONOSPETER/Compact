@@ -8,15 +8,21 @@ import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import * as core from './core.mjs';
+import { MemStore, FsStore, isId, isKid } from './store.mjs';
+import { leafHash, buildTree, proofFor } from './merkle.mjs';
 
 const MAX_BODY = 2 * 1024 * 1024;
+const MAX_BLOB = 1_048_576 + 64;
 const SESSION_TTL_MS = 30 * 60_000;
 const MAX_SESSIONS = 5000;
 const REPLAY_WINDOW = 256;
 const CALL_TIMEOUT_MS = 30_000;
 const HOP_BY_HOP = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'host', 'content-length']);
 
-const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`${what} timed out`)), ms))]);
+const withTimeout = (p, ms, what) => {
+  let t;
+  return Promise.race([p, new Promise((_, rej) => { t = setTimeout(() => rej(new Error(`${what} timed out`)), ms); })]).finally(() => clearTimeout(t));
+};
 
 export function loadEnvFile(file, env = process.env) {
   let text;
@@ -42,6 +48,85 @@ export function createRunner(o) {
   const mHash = () => (mHashPromise ??= core.manifestHash(o.manifest));
   let child = null;
   let stopping = false;
+
+  // ---- vault: opaque encrypted blobs + one head pointer per vault (the host never holds keys) ----
+  const store = o.store ?? new MemStore();
+  const vhits = new Map();
+  let treeCache = { writes: -1 };
+  async function treeOf(entries) {
+    const withLeaf = await Promise.all(entries.map(async (e) => ({ ...e, leaf: await leafHash(e.kid, e.n, e.id) })));
+    withLeaf.sort((a, b) => (core.hex(a.leaf) < core.hex(b.leaf) ? -1 : 1));
+    const { levels, root } = await buildTree(withLeaf.map((e) => e.leaf));
+    return { entries: withLeaf, levels, root: core.hex(root) };
+  }
+  async function currentTree() {
+    const w = store.stats().writes;
+    if (treeCache.writes !== w) treeCache = { writes: w, ...(await treeOf(store.leaves())) };
+    return treeCache;
+  }
+  const vlimited = (ip) => {
+    const now = Date.now();
+    const h = (vhits.get(ip) ?? []).filter((t) => now - t < 60_000);
+    h.push(now); vhits.set(ip, h);
+    return h.length > 600;
+  };
+  const readRaw = (req, limit) => new Promise((resolve, reject) => {
+    const chunks = []; let n = 0;
+    req.on('data', (c) => { n += c.length; if (n > limit) { reject(Object.assign(new Error('body too large'), { status: 413 })); req.destroy(); } else chunks.push(c); });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+  async function onVault(req, res, url) {
+    if (vlimited(req.socket.remoteAddress ?? '?')) return send(res, 429, { error: 'rate limited' });
+    const [, kind, arg = ''] = url.pathname.split('/').filter(Boolean);
+    if (kind === 'blob' && req.method === 'PUT' && !arg) {
+      const body = await readRaw(req, MAX_BLOB);
+      if (body.length < 30) return send(res, 400, { error: 'blob too small' });
+      const id = crypto.createHash('sha256').update(body).digest('hex');
+      const r = store.putBlob(id, body);
+      return r.error ? send(res, 507, { error: r.error }) : send(res, 200, { id, size: body.length });
+    }
+    if (kind === 'blob' && req.method === 'GET' && isId(arg)) {
+      const b = store.getBlob(arg);
+      if (!b) return send(res, 404, { error: 'not found' });
+      res.writeHead(200, { 'content-type': 'application/octet-stream', 'cache-control': 'public, max-age=31536000, immutable' });
+      return res.end(b);
+    }
+    if (kind === 'head' && isKid(arg)) {
+      if (req.method === 'GET') { const h = store.getHead(arg); return h ? send(res, 200, h) : send(res, 404, { error: 'no head' }); }
+      if (req.method === 'PUT') {
+        const b = await readJson(req);
+        if (!Number.isSafeInteger(b.n) || b.n < 1 || !isId(String(b.id))) return send(res, 400, { error: 'bad head' });
+        const r = store.setHead(arg, b.n, b.id);
+        return r.ok ? send(res, 200, { ok: true }) : send(res, r.error ? 400 : 409, { error: r.error ?? 'conflict', n: r.n });
+      }
+    }
+    if (kind === 'root' && req.method === 'GET') {
+      const t = await currentTree();
+      return send(res, 200, { root: t.root, count: t.entries.length, writes: store.stats().writes, ts: new Date().toISOString() });
+    }
+    if (kind === 'stats' && req.method === 'GET') return send(res, 200, store.stats());
+    if (kind === 'snapshot' && req.method === 'POST') {
+      const b = await readJson(req);
+      const t = await currentTree();
+      if (b.root !== t.root) return send(res, 409, { error: 'root changed', root: t.root });
+      store.saveSnapshot(t.root, t.entries.map(({ kid, n, id }) => ({ kid, n, id })));
+      return send(res, 200, { ok: true, root: t.root });
+    }
+    if (kind === 'proof' && req.method === 'GET' && isKid(arg)) {
+      const wanted = url.searchParams.get('root');
+      let t = await currentTree();
+      if (wanted && wanted !== t.root) {
+        const snap = store.getSnapshot(wanted);
+        if (!snap) return send(res, 404, { error: 'unknown root' });
+        t = await treeOf(snap);
+      }
+      const i = t.entries.findIndex((e) => e.kid === arg);
+      if (i < 0) return send(res, 404, { error: 'no leaf' });
+      return send(res, 200, { n: t.entries[i].n, id: t.entries[i].id, index: i, path: proofFor(t.levels, i), root: t.root, count: t.entries.length });
+    }
+    return send(res, 404, { error: 'not found' });
+  }
 
   // ---- app supervisor (http mode) ----
   async function waitForPort(port, timeoutMs = 25_000) {
@@ -112,7 +197,7 @@ export function createRunner(o) {
       res.setHeader('access-control-allow-origin', allowed.includes('*') ? '*' : origin);
       res.setHeader('vary', 'origin');
       res.setHeader('access-control-allow-headers', 'content-type, x-compact-sid');
-      res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
+      res.setHeader('access-control-allow-methods', 'GET, POST, PUT, OPTIONS');
       res.setHeader('access-control-max-age', '600');
     }
   };
@@ -165,6 +250,7 @@ export function createRunner(o) {
       if (req.method === 'GET' && url.pathname === '/.compact/bundle') return send(res, 200, { manifest: o.manifest, sig: o.manifestSig });
       if (req.method === 'POST' && url.pathname === '/.compact/hello') return await onHello(req, res);
       if (req.method === 'POST' && url.pathname === '/.compact/msg') return await onMsg(req, res);
+      if (url.pathname.startsWith('/v1/')) return await onVault(req, res, url);
       send(res, 404, { error: 'not found' });
     } catch (e) {
       if (!res.headersSent) send(res, e.status ?? 500, { error: e.status ? e.message : 'internal error' });
@@ -220,6 +306,7 @@ async function main() {
   loadEnvFile(path.join(criticalDir, '.env'));
   const runner = createRunner({
     manifest, manifestSig, keys, pq: createPQ(), criticalDir,
+    store: new FsStore(process.env.COMPACT_DATA_DIR ?? path.join(compactDir, 'data')),
     appPort: Number(process.env.COMPACT_APP_PORT ?? 0) || manifest.critical.http?.port || 0,
     allowedOrigins: (process.env.COMPACT_ALLOWED_ORIGINS ?? '*').split(',').map((s) => s.trim()),
   });

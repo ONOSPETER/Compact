@@ -99,3 +99,15 @@ test('transform refuses: invalid plan, existing output without --force; --force 
   assert.notEqual(fs.readFileSync(path.join(out, 'compact/keys/runner.secret.json'), 'utf8'), before); // new keys
   assert.deepEqual(fs.readdirSync(path.dirname(out)).filter((f) => f.includes('staging') || f.includes('.old-')), []); // no debris
 });
+
+test('transform only drops scripts that launch a server file (build/dev/preview survive)', async () => {
+  const src = tmp();
+  write(src, {
+    ...EXPRESS,
+    'package.json': JSON.stringify({ name: 'notes', type: 'module', scripts: { dev: 'vite', build: 'node scripts/build.js', start: 'node server/index.js', server: 'nodemon server/index.js', preview: 'vite preview' }, dependencies: { express: '^4', react: '^18', 'better-sqlite3': '^9' }, devDependencies: { vite: '^5' } }),
+    'scripts/build.js': 'console.log(1)',
+  });
+  const r = await transformProject(await ctxFor(tmp()), src, { out: path.join(tmp(), 'o'), name: 'notes' });
+  const pp = JSON.parse(fs.readFileSync(path.join(r.outDir, 'portal/package.json'), 'utf8'));
+  assert.deepEqual(Object.keys(pp.scripts).sort(), ['build', 'dev', 'preview']);
+});

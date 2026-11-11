@@ -8,7 +8,8 @@ import { redact } from '../util/log.mjs';
 import setup from './commands/setup.mjs';
 import account from './commands/account.mjs';
 import doctor from './commands/doctor.mjs';
-import { analyzeCmd, transformCmd, deployCmd, pushCmd, shipCmd, serveCmd } from './commands/build.mjs';
+import { analyzeCmd, transformCmd, deployCmd, pushCmd, shipCmd, serveCmd, commitCmd, upgradeCmd, exportCmd } from './commands/build.mjs';
+import vaultCmd from './commands/vault.mjs';
 import { appsCmd, statusCmd, keysCmd, forgetCmd } from './commands/manage.mjs';
 
 const VERSION = JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version;
@@ -25,7 +26,8 @@ export const GLOBAL = {
 
 const GROUPS = [
   ['Get started', [setup, doctor, account]],
-  ['Build', [analyzeCmd, transformCmd, deployCmd, pushCmd, shipCmd, serveCmd]],
+  ['Build', [analyzeCmd, transformCmd, deployCmd, pushCmd, exportCmd, shipCmd, serveCmd, upgradeCmd]],
+  ['Vault', [vaultCmd, commitCmd]],
   ['Manage', [appsCmd, statusCmd, keysCmd, forgetCmd]],
 ];
 export const COMMANDS = GROUPS.flatMap(([, c]) => c);

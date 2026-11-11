@@ -48,7 +48,7 @@ test('transaction encoding has the expected borsh layout and a valid signature',
 
 // --- registry contract, executed against a mock NEAR host -------------------------------
 function mockHost(wasm) {
-  const memory = new WebAssembly.Memory({ initial: 1 });
+  let memory; // the contract defines and exports its own memory (NEAR rewrites it into an import)
   const registers = new Map();
   const storage = new Map();
   let ret = null;
@@ -57,7 +57,6 @@ function mockHost(wasm) {
   const bytes = (rawLen, ptr) => { const len = BigInt.asUintN(64, rawLen); return len === MAX ? Buffer.from(registers.get(ptr) ?? (() => { throw new Error('bad register'); })()) : Buffer.from(mem().slice(Number(ptr), Number(ptr + len))); };
   const imports = {
     env: {
-      memory,
       input: (r) => registers.set(r, host.input),
       register_len: (r) => BigInt(registers.get(r)?.length ?? MAX),
       read_register: (r, p) => mem().set(registers.get(r), Number(p)),
@@ -68,7 +67,7 @@ function mockHost(wasm) {
     },
   };
   const host = { input: Buffer.alloc(0), storage };
-  return WebAssembly.instantiate(wasm, imports).then(({ instance }) => ({
+  return WebAssembly.instantiate(wasm, imports).then(({ instance }) => (memory = instance.exports.memory, {
     call(method, input) { host.input = Buffer.from(input); ret = null; registers.clear(); instance.exports[method](); return ret; },
     storage,
   }));
@@ -77,7 +76,8 @@ function mockHost(wasm) {
 test('registry wasm validates and behaves: set, get, overwrite, missing key, short input', async () => {
   const wasm = buildRegistryWasm();
   assert.ok(WebAssembly.validate(wasm));
-  assert.ok(wasm.length < 400);
+  assert.ok(wasm.length < 450);
+  assert.ok(!WebAssembly.Module.imports(new WebAssembly.Module(wasm)).some((i) => i.kind === 'memory'), 'NEAR rejects contracts that import memory');
   const c = await mockHost(wasm);
   const key = registryKey('my-app');
   c.call('set', Buffer.concat([key, Buffer.from('{"v":1}')]));

@@ -10,6 +10,10 @@ export { analyzeProject, transformProject, assertPlanOk } from './transform/tran
 export { deployProject, ensureFunded } from './deploy/deploy.mjs';
 export { pushPortal } from './deploy/push.mjs';
 export { serveProject } from './deploy/serve.mjs';
+export { commitProject, onChainShare } from './deploy/commit.mjs';
+export { upgradeProject } from './deploy/upgrade.mjs';
+export { assembleVercel, pushProject, exportProject } from './deploy/vercel.mjs';
+export { VaultClient, randomKey, keyFromPassphrase } from '../templates/runtime/vault.mjs';
 export { loadApp, readProject, refreshManifest } from './deploy/project.mjs';
 export { buildPlan } from './analyze/plan.mjs';
 export { Keystore } from './store/keystore.mjs';

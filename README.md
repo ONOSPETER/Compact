@@ -40,8 +40,12 @@ Step by step instead of `ship`:
 | `compact transform <path\|github-url>` | Build `portal/ critical/ compact/` + fresh PQ keys + signed manifest. |
 | `compact serve` | Run the critical side locally on :8787 (installs deps if needed). |
 | `compact deploy [--endpoint URL]` | Deploy the registry contract (once) and write the app record on NEAR; print receipts. |
-| `compact push` | Publish `portal/` to GitHub (private repo by default, secret scan first). |
-| `compact apps / status / keys / forget` | Everything Compact remembers; receipts; connection info; cleanup. |
+| `compact push` | Publish the **whole app as ONE private repo ready for Vercel** (Vite app at the root, critical + Compact runtime under `compact/`, one serverless function). Secret scan first. `--portal-only` pushes just `portal/`. |
+| `compact export` | Write that same single-repo tree to a local folder (inspect it, or `vercel dev`). |
+| `compact upgrade [app]` | Refresh the generated runtime files of an existing project (adds the vault) without touching code, keys or manifest. |
+| `compact vault init/put/get/list/rm/verify` | End-to-end encrypted storage on the runner, checked against NEAR. |
+| `compact commit [--every N]` | Anchor the vault's Merkle root on NEAR, only when enough writes accumulated. |
+| `compact apps / status / keys / forget` | Everything Compact remembers; receipts; connection info; on-chain share; cleanup. |
 | `compact account / doctor` | Deployer management (balance, export, import) and diagnostics. |
 
 Every command supports `--json` (clean machine output), `--yes` (no prompts), `--debug`, `--quiet`, `--no-color`.
@@ -83,6 +87,50 @@ Everything is idempotent: re-running `deploy` only sends what changed. Receipts 
 
 > NEAR does not execute your Node code. The registry records what the runner must be; the runner itself runs on a
 > TEE host (dstack / Phala Cloud) using `compact/deploy/Dockerfile`, or locally with `compact serve`.
+
+## Running everything on Vercel (single repo)
+
+`compact push` assembles one repository that Vercel deploys as-is:
+```
+index.html, src/…            your Vite app (portal) + src/compact/ (client, vault client, connect.json)
+api/compact/[...path].mjs    ONE Vercel function: PQ channel + encrypted vault + your critical code
+compact/critical/            your backend code (never served; read by the function)
+compact/runtime/             serverless handler, Redis store, crypto
+compact/manifest.json/.sig   signed manifest (public)
+vercel.json  .env.example  README.vercel.md  package.json (portal + backend dependencies merged)
+```
+Vercel setup: import the repo (preset Vite) → add the **Upstash Redis** integration (sets `UPSTASH_REDIS_REST_URL/TOKEN`)
+→ set `COMPACT_KEYS_B64` (`compact keys --b64`) and your app's own secrets → deploy → check `/api/compact/health`
+(`integrity.ok` should be true) → `compact deploy --endpoint https://<app>.vercel.app` → `compact commit --force`.
+
+How it differs from the long-running runner (it has to, serverless instances share no memory):
+- sessions are **sealed tickets** (the session keys travel with each request, encrypted under a server-side key), so any
+  instance can answer; replay protection uses Redis `SET NX`;
+- vault blobs and heads live in Redis (records up to about 256 KB), not on a disk;
+- your Express app starts inside the function on first request (it must listen on `process.env.PORT`, as most do).
+Not verified on real Vercel/Upstash from the build sandbox: run the steps above and report anything that differs.
+
+## Vault (v0.2): data the host cannot read, with at most ~10% of activity on-chain
+
+```bash
+compact serve                                   # runner (stores ciphertext only), shell 1
+compact vault init                              # random 256-bit key at ~/.compact/vault-keys/<app>.key  (BACK IT UP)
+compact vault put notes/1 "my secret"           # encrypted on this device, padded, stored as an opaque blob
+compact vault get notes/1
+compact commit --force                          # anchor the Merkle root of all vault heads on NEAR (one tx)
+compact vault verify                            # is the host serving what was anchored?  (free view call)
+compact status                                  # shows the on-chain share
+```
+- **Post-quantum by construction:** the data path uses only AES-256-GCM with a 256-bit key that never leaves the
+  client. No public-key exchange sits in the path, so recorded traffic and stolen ciphertext stay unreadable.
+- **Host sees:** fixed-size ciphertext blobs (4 KB / 16 KB / 64 KB / 256 KB / 1 MB buckets), a pseudonymous id, IP and
+  timing. **Host cannot:** read, edit or silently roll back data (hash-checked blobs + on-chain anchor).
+- **On-chain share:** one transaction commits to every vault. `compact commit` skips unless `--min-writes` (default 10)
+  writes happened since the last anchor, so the share is about 1/(min-writes+1) or lower. Reads never need a transaction.
+  Raise `--min-writes` (or use `--every 30`) to go lower. All chain activity is on NEAR; blobs live in ordinary storage.
+- **Limits:** the runner needs a persistent disk (not Vercel functions); the index is re-encrypted on each write
+  (thousands of entries is fine, millions is not); one key per vault (no sharing between users yet); the anchor is
+  signed with the deployer's ed25519 key until NEAR's ML-DSA account keys are supported by the CLI.
 
 ## Fault tolerance
 

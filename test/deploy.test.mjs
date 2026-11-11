@@ -7,7 +7,7 @@ import { createContext } from '../src/context.mjs';
 import { transformProject } from '../src/transform/transform.mjs';
 import { deployProject } from '../src/deploy/deploy.mjs';
 import { pushPortal } from '../src/deploy/push.mjs';
-import { readRecord } from '../src/near/registry.mjs';
+import { readRecord, buildRegistryWasm, registryWasmHash } from '../src/near/registry.mjs';
 import { mockPQ, mockNear, mockGithub } from './helpers.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'compact-dp-'));
@@ -106,4 +106,32 @@ test('push: creates a private repo, is idempotent, retries rate limits, blocks s
   assert.equal((await ctx.state.get(c.app.id)).pushes.length, 3);
   const dry = await pushPortal(ctx, 'notes', { dryRun: true });
   assert.ok(dry.files.includes('src/compact/connect.json') && !dry.files.some((f) => f.includes('server')));
+});
+
+test('deploy: a deployer that still has the v0.1.0 registry (memory import, rejected by NEAR) is upgraded in place', async () => {
+  const near = mockNear();
+  const { ctx } = await setup({ near });
+  const dep = await ctx.keystore.add({}); near.fund(dep.accountId);
+  near.accounts.get(dep.accountId).code = buildRegistryWasm({ legacy: true });
+  assert.notEqual(registryWasmHash(), registryWasmHash({ legacy: true }));
+  const out = await deployProject(ctx, 'notes');
+  assert.deepEqual(out.receipts.map((x) => x.name), ['deploy-registry', 'write-record']);
+  assert.ok(near.accounts.get(dep.accountId).code.equals(buildRegistryWasm()));
+});
+
+test('deploy: a failed transaction shows the on-chain failure reason', async () => {
+  const near = mockNear();
+  const { ctx } = await setup({ near });
+  const dep = await ctx.keystore.add({}); near.fund(dep.accountId);
+  const real = near.fetch;
+  near.fetch = async (url, init) => { // make `set` fail the way NEAR reported it
+    const r = await real(url, init);
+    if (JSON.parse(init.body).method !== 'tx') return r;
+    const body = await r.json();
+    const fail = { ActionError: { index: 0, kind: { FunctionCallError: { CompilationError: { PrepareError: 'Memory' } } } } };
+    const hit = body.result?.transaction_outcome && near.calls.filter((m) => m === 'broadcast_tx_async').length >= 2;
+    if (hit) { body.result.status = { Failure: fail }; body.result.receipts_outcome[0].outcome.status = { Failure: fail }; }
+    return { status: 200, json: async () => body };
+  };
+  await assert.rejects(() => deployProject(ctx, 'notes'), (e) => e.code === 'E_TX_REJECTED' && Array.isArray(e.details) && /PrepareError/.test(e.details[0]));
 });

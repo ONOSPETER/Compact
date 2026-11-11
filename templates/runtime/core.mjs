@@ -48,11 +48,11 @@ export async function x25519Derive(privateKey, peerPublicRaw) {
   const peer = await crypto.subtle.importKey('raw', peerPublicRaw, { name: 'X25519' }, false, []);
   return new Uint8Array(await crypto.subtle.deriveBits({ name: 'X25519', public: peer }, privateKey, 256));
 }
-async function hkdf(ikm, salt, info, bytes) {
+export async function hkdf(ikm, salt, info, bytes) {
   const key = await crypto.subtle.importKey('raw', ikm, 'HKDF', false, ['deriveBits']);
   return new Uint8Array(await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt, info: utf8.enc(info) }, key, bytes * 8));
 }
-const aesKey = (raw) => crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
+export const aesKey = (raw) => crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
 function nonce(seq) {
   const n = new Uint8Array(12);
   new DataView(n.buffer).setBigUint64(4, BigInt(seq));
@@ -66,7 +66,25 @@ const transcript = (clientX, kemCt, serverX, mHash, sid) =>
 
 async function deriveKeys(xSecret, kemSecret, th) {
   const okm = await hkdf(concat(xSecret, kemSecret), th, `${VERSION} session keys`, 64);
-  return { c2s: await aesKey(okm.slice(0, 32)), s2c: await aesKey(okm.slice(32)) };
+  return { c2s: await aesKey(okm.slice(0, 32)), s2c: await aesKey(okm.slice(32)), raw: okm };
+}
+
+export const keysFromRaw = async (raw) => ({ c2s: await aesKey(raw.slice(0, 32)), s2c: await aesKey(raw.slice(32)), raw });
+
+// ---- stateless session tickets (for serverless hosts): the session keys travel with each request,
+// sealed under a server-side ticket key, so any instance can serve any request ----
+const TICKET_AAD = utf8.enc('compact-ticket-v1');
+export async function sealTicket(ticketKey, { sid, exp, raw }) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: TICKET_AAD }, await aesKey(ticketKey), utf8.enc(JSON.stringify({ sid, exp, k: b64.enc(raw) })));
+  return b64.enc(concat(iv, new Uint8Array(ct)));
+}
+export async function openTicket(ticketKey, ticket) {
+  const bytes = b64.dec(ticket);
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: bytes.slice(0, 12), additionalData: TICKET_AAD }, await aesKey(ticketKey), bytes.slice(12));
+  const t = JSON.parse(utf8.dec(new Uint8Array(pt)));
+  if (!(t.exp > Date.now())) throw new Error('ticket expired');
+  return { sid: t.sid, exp: t.exp, raw: b64.dec(t.k) };
 }
 
 /** Client step 1. `runnerKemPublic` comes from the signed manifest. */
@@ -86,7 +104,8 @@ export async function serverHello(pq, runnerKeys, hello, mHash, sid) {
   const xSecret = await x25519Derive(sx.privateKey, clientX);
   const th = await transcript(clientX, ct, sx.publicRaw, mHash, sid);
   const sig = pq.dsa.sign(runnerKeys.dsaSecret, th);
-  return { reply: { sid, x: b64.enc(sx.publicRaw), sig: b64.enc(sig) }, keys: await deriveKeys(xSecret, kemSecret, th) };
+  const keys = await deriveKeys(xSecret, kemSecret, th);
+  return { reply: { sid, x: b64.enc(sx.publicRaw), sig: b64.enc(sig) }, keys, raw: keys.raw };
 }
 
 /** Client step 2: verify the server's ML-DSA signature, then derive the same keys. */

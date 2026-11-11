@@ -8,7 +8,7 @@ import { deployRegistry, writeRecord, readRecord } from '../near/registry.mjs';
 import { withNote } from '../ui/ui.mjs';
 import { loadApp, refreshManifest, readProject, runnerKeyHash } from './project.mjs';
 
-const summarize = (name, r, explorer) => ({
+export const summarize = (name, r, explorer) => ({
   name, txHash: r.txHash, ok: r.ok, gasBurnt: r.gasBurnt, tokensBurnt: r.tokensBurnt, receiptIds: r.receiptIds,
   explorer: `${explorer}/txns/${r.txHash}`,
 });

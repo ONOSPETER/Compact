@@ -27,6 +27,13 @@ export async function readProject(app) {
   return { d, manifest, connect };
 }
 
+/** Where the vault/channel routes live, for the endpoint the app is served from. */
+export function apiBase(connect, endpoint) {
+  const ep = endpoint ?? connect.endpoint;
+  if (!ep || ep === 'auto') throw new CompactError('E_ENDPOINT_UNKNOWN', 'This app serves from its own origin ("auto"), so the CLI needs the public URL.', { hint: 'Pass --endpoint https://your-app.vercel.app (or run: compact deploy --endpoint <url>).', exitCode: EXIT.USAGE });
+  return ep.replace(/\/$/, '') + (connect.layout === 'vercel' ? '/api/compact' : '');
+}
+
 export const runnerKeyHash = async (manifest) => core.hex(await core.sha256(core.concat(core.b64.dec(manifest.runner.kemPublic), core.b64.dec(manifest.runner.dsaPublic))));
 
 /**

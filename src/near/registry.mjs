@@ -43,6 +43,7 @@ export function buildRegistryWasm({ legacy = false } = {}) {
     ...(legacy ? [[...name('env'), ...name('memory'), 0x02, 0x00, ...leb(1)]] : []),
   ]);
   const functions = vec([[...leb(5)], [...leb(5)]]); // two () -> () functions: indices 7 (set) and 8 (get)
+  // NEAR turns a module-defined memory into its standard imported one, and REJECTS contracts that import memory themselves.
   const memory = vec([[0x00, ...leb(1)]]);
   const exports_ = vec([[...name('set'), 0x00, ...leb(7)], [...name('get'), 0x00, ...leb(8)], ...(legacy ? [] : [[...name('memory'), 0x02, ...leb(0)]])]);
 
@@ -81,7 +82,7 @@ export async function registryStatus(rpc, accountId) {
   if (!a) return { state: 'no-account' };
   if (a.code_hash === NO_CONTRACT_HASH) return { state: 'no-contract' };
   if (a.code_hash === registryWasmHash()) return { state: 'deployed' };
-  if (a.code_hash === registryWasmHash({ legacy: true })) return { state: 'outdated' };
+  if (a.code_hash === registryWasmHash({ legacy: true })) return { state: 'outdated' }; // v0.1.0 imported its own memory: NEAR rejects that
   return { state: 'other-contract', codeHash: a.code_hash };
 }
 

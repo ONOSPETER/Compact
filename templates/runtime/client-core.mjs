@@ -28,6 +28,12 @@ export class CompactClient {
     this._pq = pq;
   }
 
+  /** Same-origin ('auto') or absolute endpoint, plus the route prefix of this layout. */
+  base() {
+    const ep = this.connect.endpoint === 'auto' ? globalThis.location.origin : this.connect.endpoint;
+    return ep + (this.connect.layout === 'vercel' ? '/api/compact' : '/.compact');
+  }
+
   async #pq() {
     if (!this._pq) this._pq = (await import('./pq.mjs')).createPQ();
     return this._pq;
@@ -56,8 +62,8 @@ export class CompactClient {
     const mHashHex = core.hex(mHash);
     await this.verifyRegistry(mHashHex);
 
-    const res = await this.fetchImpl(`${this.connect.endpoint}/.compact/bundle`);
-    if (!res.ok) throw new CompactError(`Critical side unreachable (${res.status})`, 'UNREACHABLE');
+    const res = await this.fetchImpl(`${this.base()}/bundle`);
+    if (!res.ok) { await res.arrayBuffer().catch(() => {}); throw new CompactError(`Critical side unreachable (${res.status})`, 'UNREACHABLE'); }
     const bundle = await res.json();
     const served = core.hex(await core.manifestHash(bundle.manifest));
     if (served !== mHashHex) throw new CompactError('The server runs a different manifest than this portal expects', 'MANIFEST_MISMATCH');
@@ -67,11 +73,11 @@ export class CompactClient {
     }
 
     const { hello, state } = await core.clientHello(pq, core.b64.dec(this.manifest.runner.kemPublic));
-    const hr = await this.fetchImpl(`${this.connect.endpoint}/.compact/hello`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(hello) });
-    if (!hr.ok) throw new CompactError(`Handshake rejected (${hr.status})`, 'HANDSHAKE');
+    const hr = await this.fetchImpl(`${this.base()}/hello`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(hello) });
+    if (!hr.ok) { await hr.arrayBuffer().catch(() => {}); throw new CompactError(`Handshake rejected (${hr.status})`, 'HANDSHAKE'); }
     const reply = await hr.json();
     const keys = await core.clientFinish(pq, state, hello, reply, dsaPub, mHash);
-    this.session = { sid: reply.sid, keys };
+    this.session = { sid: reply.sid, keys, ticket: reply.ticket };
     this.seq = 0;
   }
 
@@ -81,12 +87,12 @@ export class CompactClient {
     await this.ready();
     const { sid, keys } = this.session;
     const seq = ++this.seq;
-    const res = await this.fetchImpl(`${this.connect.endpoint}/.compact/msg`, {
-      method: 'POST', headers: { 'content-type': 'application/json', 'x-compact-sid': sid },
+    const res = await this.fetchImpl(`${this.base()}/msg`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-compact-sid': sid, ...(this.session.ticket ? { 'x-compact-ticket': this.session.ticket } : {}) },
       body: JSON.stringify({ seq, ct: await core.sealMessage(keys, 'c2s', sid, seq, message) }),
     });
-    if (res.status === 401 && !retried) { this._opening = null; this.session = null; return this.#send(message, true); } // server restarted or session expired
-    if (!res.ok) throw new CompactError(`Request failed (${res.status})`, 'REQUEST');
+    if (res.status === 401 && !retried) { await res.arrayBuffer().catch(() => {}); this._opening = null; this.session = null; return this.#send(message, true); } // server restarted or session expired
+    if (!res.ok) { await res.arrayBuffer().catch(() => {}); throw new CompactError(`Request failed (${res.status})`, 'REQUEST'); }
     const body = await res.json();
     return core.openMessage(keys, 's2c', sid, body.seq, body.ct);
   }

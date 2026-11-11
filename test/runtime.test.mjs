@@ -79,15 +79,18 @@ test('replay of an encrypted message is rejected; garbage is rejected without cr
     await client.ready();
     const { sid, keys } = client.session;
     const ct = await core.sealMessage(keys, 'c2s', sid, 1, { t: 'rpc', module: 'a.js', fn: 'f', args: [] });
-    const post = (body, s = sid) => fetch(`http://127.0.0.1:${port}/.compact/msg`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-compact-sid': s }, body: JSON.stringify(body) });
+    const post = async (body, s = sid) => { const r = await fetch(`http://127.0.0.1:${port}/.compact/msg`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-compact-sid': s }, body: JSON.stringify(body) }); await r.arrayBuffer(); return r; };
     assert.equal((await post({ seq: 1, ct })).status, 200);
     assert.equal((await post({ seq: 1, ct })).status, 409); // replay
     assert.equal((await post({ seq: 5, ct })).status, 400); // wrong sequence for this ciphertext
     assert.equal((await post({ nonsense: true })).status, 409);
     assert.equal((await post({ seq: 2, ct }, 'nosuch')).status, 401);
     const bad = await fetch(`http://127.0.0.1:${port}/.compact/hello`, { method: 'POST', body: '{not json' });
+    await bad.arrayBuffer();
     assert.equal(bad.status, 400);
-    assert.equal((await fetch(`http://127.0.0.1:${port}/.compact/health`)).status, 200);
+    const health = await fetch(`http://127.0.0.1:${port}/.compact/health`);
+    await health.arrayBuffer();
+    assert.equal(health.status, 200);
   } finally { await runner.close(); }
 });
 

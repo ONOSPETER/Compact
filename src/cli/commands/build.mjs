@@ -2,7 +2,11 @@ import path from 'node:path';
 import { analyzeProject, assertPlanOk, transformProject } from '../../transform/transform.mjs';
 import { deployProject } from '../../deploy/deploy.mjs';
 import { pushPortal } from '../../deploy/push.mjs';
+import { pushProject, exportProject } from '../../deploy/vercel.mjs';
 import { serveProject } from '../../deploy/serve.mjs';
+import { commitProject } from '../../deploy/commit.mjs';
+import { upgradeProject } from '../../deploy/upgrade.mjs';
+import { sleep } from '../../util/fs.mjs';
 import { confirm } from '../../ui/prompt.mjs';
 import { CompactError, EXIT } from '../../errors.mjs';
 import { printPlan, planJson, printReceipts } from '../render.mjs';
@@ -37,10 +41,18 @@ function printDeployed(ui, d) {
 }
 
 function printPushed(ui, p) {
-  ui.heading(p.unchanged ? 'GitHub is already up to date' : 'Portal pushed to GitHub');
+  ui.heading(p.unchanged ? 'GitHub is already up to date' : p.layout === 'vercel' ? 'App pushed to GitHub (one repo, ready for Vercel)' : 'Portal pushed to GitHub');
   ui.kv([['Repository', p.url], ['Branch', p.branch], ['Commit', p.commitSha?.slice(0, 10)], ['Visibility', p.private ? 'private' : 'public']]);
   ui.blank();
-  ui.line('  Next: import this repository in Vercel (Add New → Project). Framework preset: Vite.');
+  if (p.layout === 'vercel') {
+    ui.line('  Next, in Vercel:');
+    ui.line('   1. Add New, Project: import this repository (framework preset: Vite).');
+    ui.line('   2. Storage: add the Upstash Redis integration (sets the UPSTASH_REDIS_REST_* variables).');
+    ui.line(`   3. Environment Variables: COMPACT_KEYS_B64 (run: compact keys --b64)${p.env?.app?.length ? `, plus ${p.env.app.join(', ')}` : ''}.`);
+    ui.line('   4. Deploy, then run: compact deploy --endpoint https://<your-app>.vercel.app');
+    return;
+  }
+  ui.line('  Next: import this repository in Vercel (Add New, Project). Framework preset: Vite.');
   if (p.endpointIsLocal) ui.warn('The portal still points at localhost. Host the runner, then: compact deploy --endpoint <https url>, then compact push.');
 }
 
@@ -106,10 +118,11 @@ export const deployCmd = {
 
 export const pushCmd = {
   name: 'push',
-  summary: 'Publish portal/ to a GitHub repository (private by default)',
+  summary: 'Publish the whole app as ONE private repo ready for Vercel (--portal-only for the UI alone)',
   usage: 'compact push [app] [options]',
   options: {
-    repo: { type: 'string', description: 'Repository name (default: <app>-portal)' },
+    repo: { type: 'string', description: 'Repository name (default: the app name)' },
+    'portal-only': { type: 'boolean', description: 'Push only portal/ (old behaviour, for a backend hosted elsewhere)' },
     owner: { type: 'string', description: 'User or organisation (default: you)' },
     branch: { type: 'string', description: 'Branch (default: main)' },
     public: { type: 'boolean', description: 'Create the repository as public' },
@@ -119,10 +132,11 @@ export const pushCmd = {
   },
   examples: ['compact push', 'compact push notes --repo notes-site --public', 'compact push --dry-run'],
   async run({ ctx, ui, values, positionals }) {
-    const p = await pushPortal(ctx, positionals[0], { owner: values.owner, repo: values.repo, branch: values.branch, isPrivate: !values.public, message: values.message, allowSecrets: values['allow-secrets'], dryRun: values['dry-run'] });
-    if (p.dryRun) { ui.heading(`Would push ${p.files.length} files`); p.files.slice(0, 40).forEach((f) => ui.line(`  ${f}`)); return { ok: true, dryRun: true, files: p.files }; }
+    const opts = { owner: values.owner, repo: values.repo, branch: values.branch, isPrivate: !values.public, message: values.message, allowSecrets: values['allow-secrets'], dryRun: values['dry-run'] };
+    const p = await (values['portal-only'] ? pushPortal : pushProject)(ctx, positionals[0], opts);
+    if (p.dryRun) { ui.heading(`Would push ${p.files.length} files`); p.files.slice(0, 60).forEach((f) => ui.line(`  ${f}`)); return { ok: true, dryRun: true, files: p.files, env: p.env }; }
     printPushed(ui, p);
-    return { ok: true, url: p.url, owner: p.owner, repo: p.repo, branch: p.branch, commitSha: p.commitSha, unchanged: p.unchanged, private: p.private };
+    return { ok: true, url: p.url, owner: p.owner, repo: p.repo, branch: p.branch, commitSha: p.commitSha, unchanged: p.unchanged, private: p.private, layout: p.layout ?? 'portal', env: p.env };
   },
 };
 
@@ -151,7 +165,7 @@ export const shipCmd = {
     const d = await deployProject(ctx, r.app.id, { endpoint: values.endpoint, wait: values.wait });
     printDeployed(ui, d);
     let p = null;
-    if (!values['skip-push']) { p = await pushPortal(ctx, r.app.id, { owner: values.owner, repo: values.repo, isPrivate: !values.public }); printPushed(ui, p); }
+    if (!values['skip-push']) { p = await pushProject(ctx, r.app.id, { owner: values.owner, repo: values.repo, isPrivate: !values.public }); printPushed(ui, p); }
     ui.heading('What is left for you');
     ui.line('  1. Host the runner on a TEE host (see compact/deploy/README.md); `compact keys --b64` prints its sealed secret.');
     ui.line('  2. compact deploy --endpoint <runner url>   then   compact push');
@@ -170,5 +184,72 @@ export const serveCmd = {
   async run({ ctx, values, positionals }) {
     const r = await serveProject(ctx, positionals[0], { port: Number(values.port ?? 8787), install: !values['no-install'], origins: values.origins });
     return { ok: r.exitCode === 0, exitCode: r.exitCode };
+  },
+};
+
+export const commitCmd = {
+  name: 'commit',
+  summary: 'Anchor the vault\'s Merkle root on NEAR (only once enough writes have accumulated)',
+  usage: 'compact commit [app] [options]',
+  options: {
+    endpoint: { type: 'string', description: 'Runner URL (default: from the portal connect.json)' },
+    'min-writes': { type: 'string', description: 'Skip unless this many vault writes happened since the last anchor (default 10)' },
+    force: { type: 'boolean', description: 'Anchor now regardless of the threshold' },
+    every: { type: 'string', description: 'Keep running: check every N minutes (Ctrl+C to stop)' },
+    wait: { type: 'boolean', description: 'Wait for the deployer to be funded' },
+    account: { type: 'string', description: 'Use a specific deployer address' },
+  },
+  examples: ['compact commit', 'compact commit --force', 'compact commit --every 30 --min-writes 20'],
+  async run({ ctx, ui, values, positionals }) {
+    const once = async () => {
+      const r = await commitProject(ctx, positionals[0], { endpoint: values.endpoint, minWrites: Number(values['min-writes'] ?? 10), force: values.force, wait: values.wait, account: values.account });
+      if (r.skipped) {
+        const why = { empty: 'the vault is empty', unchanged: 'nothing changed since the last anchor', 'below-threshold': `only ${r.since}/${r.minWrites} writes since the last anchor` }[r.reason];
+        ui.info(`Skipped: ${why}. No transaction sent (keeps on-chain activity low).`);
+      } else {
+        ui.heading('Vault root anchored on NEAR testnet');
+        ui.kv([['Root', r.record.root], ['Vaults', r.record.count], ['Writes covered', r.record.writes], ['On-chain share', `${(r.share * 100).toFixed(1)}%  (${r.txs} transactions vs ${r.writes} vault writes)`]]);
+        ui.blank(); printReceipts(ui, r.receipts);
+      }
+      return r;
+    };
+    if (!values.every) return { ok: true, ...(await once()) };
+    const mins = Number(values.every);
+    ui.info(`Checking every ${mins} min. Press Ctrl+C to stop.`);
+    while (!ctx.signal?.aborted) {
+      try { await once(); } catch (e) { ui.warn(`Commit check failed: ${e.message}`); }
+      for (let t = 0; t < mins * 60 && !ctx.signal?.aborted; t++) await sleep(1000);
+    }
+    return { ok: true };
+  },
+};
+
+export const upgradeCmd = {
+  name: 'upgrade',
+  summary: 'Refresh the generated runtime files of an existing project (adds the vault)',
+  usage: 'compact upgrade [app]',
+  options: {},
+  examples: ['compact upgrade', 'compact upgrade notes'],
+  async run({ ctx, ui, positionals }) {
+    const r = await upgradeProject(ctx, positionals[0]);
+    ui.heading(`Upgraded ${r.app.name}`);
+    if (!r.changed.length) ui.line('  Already up to date.');
+    for (const f of r.changed) ui.line(`  updated  ${f}`);
+    ui.hint('Your code, keys, manifest and receipts were not touched. Restart `compact serve` to load the new runner.');
+    return { ok: true, changed: r.changed };
+  },
+};
+
+export const exportCmd = {
+  name: 'export',
+  summary: 'Write the single-repo Vercel tree to a local folder (inspect it, or run vercel dev)',
+  usage: 'compact export [app] [options]',
+  options: { out: { type: 'string', short: 'o', description: 'Output folder (default: <app>-vercel)' }, force: { type: 'boolean', description: 'Write into a non-empty folder' } },
+  examples: ['compact export', 'compact export notes --out ./site'],
+  async run({ ctx, ui, values, positionals }) {
+    const r = await exportProject(ctx, positionals[0], { out: values.out, force: values.force });
+    ui.success(`Wrote ${r.files} files to ${r.dest}`);
+    ui.hint(`Environment variables to set on Vercel: ${[...r.env.required, ...r.env.storage, ...r.env.app].join(', ')}`);
+    return { ok: true, dest: r.dest, files: r.files, env: r.env };
   },
 };

@@ -8,7 +8,9 @@ const TEMPLATES = new URL('../../templates/runtime/', import.meta.url);
 const NOBLE = '^0.5.0';
 export const RUNNER_PORT = 8787;
 
-const readTemplate = (name) => fsp.readFile(new URL(name, TEMPLATES), 'utf8');
+export const readTemplate = (name) => fsp.readFile(new URL(name, TEMPLATES), 'utf8');
+export const RUNNER_RUNTIME = ['runner.mjs', 'core.mjs', 'pq.mjs', 'merkle.mjs', 'store.mjs', 'kv.mjs', 'serverless.mjs'];
+export const portalRuntimeFiles = (mode) => ['client.mjs', 'client-core.mjs', 'core.mjs', 'pq.mjs', 'merkle.mjs', 'vault.mjs', ...(mode === 'http' ? ['install.mjs'] : [])];
 const rel = (from, to) => { const r = path.posix.relative(path.posix.dirname(from), to); return r.startsWith('.') ? r : `./${r}`; };
 
 export function splitEnv(text) {
@@ -61,6 +63,7 @@ function derivePackages({ pkg, plan, name }) {
   const criticalPaths = [plan.entry, ...Object.keys(plan.files).filter((f) => plan.files[f].side === 'critical')].filter(Boolean);
   const startsServer = /\b(node|nodemon|tsx|ts-node|babel-node|bun|deno)\b/;
   for (const [k, v] of Object.entries(portalPkg.scripts ?? {})) {
+    // Only drop scripts that launch a server file. Never build/dev/preview scripts.
     if (startsServer.test(v) && !/\bvite\b/.test(v) && criticalPaths.some((p) => v.includes(p))) { removedScripts.push(k); delete portalPkg.scripts[k]; }
   }
   portalPkg.dependencies = { ...(portalPkg.dependencies ?? {}), '@noble/post-quantum': NOBLE };
@@ -119,10 +122,10 @@ export async function buildOutput({ srcDir, files, plan, pkg, staging, appId, na
   await fsp.writeFile(gi, `${existingGi.trimEnd()}\nnode_modules\ndist\n.env\n.env.local\n.vercel\n`.trimStart());
 
   // 4. runtime files
-  const portalRt = ['client.mjs', 'client-core.mjs', 'core.mjs', 'pq.mjs', ...(plan.mode === 'http' ? ['install.mjs'] : [])];
+  const portalRt = portalRuntimeFiles(plan.mode);
   await ensureDir(path.join(P, 'src/compact'));
   for (const t of portalRt) await fsp.writeFile(path.join(P, 'src/compact', t), await readTemplate(t));
-  for (const t of ['runner.mjs', 'core.mjs', 'pq.mjs']) await fsp.writeFile(path.join(K, 'runtime', t), await readTemplate(t));
+  for (const t of RUNNER_RUNTIME) await fsp.writeFile(path.join(K, 'runtime', t), await readTemplate(t));
   await writeJson(path.join(K, 'runtime/package.json'), { name: 'compact-runtime', private: true, type: 'module', dependencies: { '@noble/post-quantum': NOBLE } });
 
   // 5. keys, manifest, signature
@@ -172,7 +175,7 @@ export async function buildOutput({ srcDir, files, plan, pkg, staging, appId, na
   });
   await writeDeployFiles(K, plan);
   await writeWrappers(K);
-  await fsp.writeFile(path.join(staging, '.gitignore'), 'compact/keys/\ncompact/receipts/\nnode_modules/\ncritical/.env*\n.env*\n');
+  await fsp.writeFile(path.join(staging, '.gitignore'), 'compact/keys/\ncompact/receipts/\ncompact/data/\nnode_modules/\ncritical/.env*\n.env*\n');
   await fsp.writeFile(path.join(staging, 'README.compact.md'), readme({ name, plan }));
   return { manifest, connect, notes, keyFile: 'compact/keys/runner.secret.json' };
 }
@@ -210,7 +213,7 @@ COMPACT_KEYS_B64=
 # Restrict to your Vercel domain(s) in production, comma separated:
 COMPACT_ALLOWED_ORIGINS=*
 `);
-  await fsp.writeFile(path.join(D, '.dockerignore'), 'compact/keys\ncompact/receipts\n**/node_modules\nportal\n.env*\n');
+  await fsp.writeFile(path.join(D, '.dockerignore'), 'compact/keys\ncompact/receipts\ncompact/data\n**/node_modules\nportal\n.env*\n');
   await fsp.writeFile(path.join(D, 'README.md'), `# Deploying the critical side
 
 1. \`compact deploy\` anchors the manifest on NEAR testnet (receipts are saved in compact/receipts/).

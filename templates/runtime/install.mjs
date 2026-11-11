@@ -5,7 +5,7 @@ import connect from './connect.json';
 
 const prefixes = connect.proxyPrefixes ?? ['/api'];
 const original = globalThis.fetch.bind(globalThis);
-const matches = (p) => prefixes.some((x) => p === x || p.startsWith(`${x}/`));
+const matches = (p) => !p.startsWith('/api/compact') && prefixes.some((x) => p === x || p.startsWith(`${x}/`));
 
 globalThis.fetch = async (input, init) => {
   const req = new Request(input, init);

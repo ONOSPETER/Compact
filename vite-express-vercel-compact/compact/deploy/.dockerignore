@@ -1,0 +1,6 @@
+compact/keys
+compact/receipts
+compact/data
+**/node_modules
+portal
+.env*

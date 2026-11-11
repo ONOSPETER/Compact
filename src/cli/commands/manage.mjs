@@ -4,6 +4,7 @@ import { CompactError, EXIT } from '../../errors.mjs';
 import { confirm } from '../../ui/prompt.mjs';
 import { loadApp, readProject, runnerKeyHash, dirs } from '../../deploy/project.mjs';
 import { printReceipts } from '../render.mjs';
+import { onChainShare } from '../../deploy/commit.mjs';
 
 export const appsCmd = {
   name: 'apps',
@@ -40,6 +41,8 @@ export const statusCmd = {
       ['App id', app.id], ['Folder', app.outDir], ['Source', app.source?.type === 'github' ? `${app.source.url} @ ${app.source.sha?.slice(0, 8)}` : app.source?.path],
       ['Mode', manifest.mode], ['Manifest', connect.manifestSha256], ['Runner key', (await runnerKeyHash(manifest)).slice(0, 16) + '…'],
       ['Endpoint', connect.endpoint], ['Registry', connect.near?.registryAccount ?? ui.c.dim('not anchored yet')],
+      ['Vault anchors', app.anchors?.length ? `${app.anchors.length} (last ${app.anchors.at(-1).at})` : ui.c.dim('none yet: compact commit')],
+      ['On-chain share', (() => { const s = onChainShare(app); return s.txs + s.writes ? `${(s.share * 100).toFixed(1)}%  (${s.txs} transactions vs ${s.writes} vault writes)` : ui.c.dim('no activity yet'); })()],
       ['GitHub', app.github ? `${app.github.url} (${app.github.branch}, ${app.github.commitSha?.slice(0, 8)})` : ui.c.dim('not pushed yet')],
     ]);
     const shown = values.all ? deployments : deployments.slice(-1);

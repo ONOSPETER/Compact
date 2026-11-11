@@ -1,0 +1,20 @@
+{
+  "v": 1,
+  "appId": "vite-express-vercel-599aac",
+  "mode": "http",
+  "manifestSha256": "1d57b34f50ebbde997d8d4506fec00331cf0bed24b2900e817567526676c07df",
+  "endpoint": "http://localhost:8787",
+  "verify": "strict",
+  "near": {
+    "network": "testnet",
+    "rpcUrls": [
+      "https://test.rpc.fastnear.com",
+      "https://rpc.testnet.near.org"
+    ],
+    "registryAccount": "710e3263748d594c2c1edc57c3ef40c2151a728a46d7453709ecc2d2c0d5467c"
+  },
+  "proxyPrefixes": [
+    "/api"
+  ],
+  "layout": "vercel"
+}
