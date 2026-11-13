@@ -114,7 +114,7 @@ The UI is a Vite + React app (`ui/`) in front of a small local API (`src/ui-serv
 ![Step 9](docs/screenshots/09-verify.png)
 
 ## CLI
-
+compact-cli github: https://github.com/ONOSPETER/Compact-CLI
 ```bash
 node bin/compact.mjs setup                      # deployer account, GitHub token, checks (once)
 node bin/compact.mjs ship ./my-vite-app --wait  # transform -> anchor on NEAR -> push to GitHub
