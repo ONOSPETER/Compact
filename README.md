@@ -165,6 +165,14 @@ Every command supports `--json`, `--yes`, `--debug`, `--quiet`, `--no-color`. Ex
 - Classical parts that remain: TLS certificates and NEAR transaction signatures (ed25519).
 - Known limits: cookie auth, WebSockets and axios's default XHR adapter do not pass through the channel (warnings are shown); TypeScript server entries must be compiled first; analysis is regex-based, so dynamic imports are reported as warnings.
 
+## Tests
+Test project: 
+original github: https://github.com/avinava/simple-vite-react-express
+
+Transformed compact version: https://github.com/ONOSPETER/test3
+
+Site on vercel: https://test3-chi-khaki.vercel.app/
+
 ## Security notes
 
 - Testnet only. Use a dedicated deployer account: the registry contract does not check callers.
