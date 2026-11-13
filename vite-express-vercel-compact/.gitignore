@@ -1,6 +1,0 @@
-compact/keys/
-compact/receipts/
-compact/data/
-node_modules/
-critical/.env*
-.env*

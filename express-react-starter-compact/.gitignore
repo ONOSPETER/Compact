@@ -1,5 +1,0 @@
-compact/keys/
-compact/receipts/
-node_modules/
-critical/.env*
-.env*

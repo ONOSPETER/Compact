@@ -1,0 +1,16 @@
+node_modules/
+ui/dist/
+.env
+.env.*
+!.env.example
+*.zip
+*.patch
+
+# Generated Compact projects hold runner keys: never commit them
+test1-compact/
+test2-compact/
+test3-compact/
+compact2-compact/
+compact-test2-compact/
+**/compact/keys/
+*.staging-*/

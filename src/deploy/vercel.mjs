@@ -3,6 +3,8 @@ import path from 'node:path';
 import { CompactError, EXIT } from '../errors.mjs';
 import { walk, writeJson, ensureDir } from '../util/fs.mjs';
 import { readTemplate } from '../transform/build.mjs';
+import { planViteConfig } from '../transform/viteconfig.mjs';
+import { dropServerSteps, serverDirsOf } from '../transform/scripts.mjs';
 import { collectPublishFiles, scanForSecrets, pushFiles } from '../github/push.mjs';
 import { slugify } from '../store/state.mjs';
 import { loadApp, readProject, dirs } from './project.mjs';
@@ -42,7 +44,12 @@ export async function assembleVercel(app) {
   add('compact/critical/package.json', await fsp.readFile(path.join(d.critical, 'package.json'))); // unchanged: it is part of the signed manifest, and fixes the module type
 
   const deps = { ...(criticalPkg.dependencies ?? {}), ...(portalPkg.dependencies ?? {}), '@noble/post-quantum': NOBLE };
-  const pkg = { ...portalPkg, dependencies: Object.fromEntries(Object.entries(deps).sort(([a], [b]) => (a < b ? -1 : 1))), engines: { node: '>=20' } };
+  // Same guard as `transform`: apps built before it existed get a vite.config.ts at push time.
+  const vite = await planViteConfig({ rootFiles: [...out.keys()].filter((f) => !f.includes('/')), pkg: portalPkg, readFile: async (n) => out.get(n).content.toString('utf8') });
+  for (const f of vite.remove ?? []) out.delete(f);
+  if (vite.write) add(vite.write.path, vite.write.content);
+  const pkg = { ...vite.pkg, dependencies: Object.fromEntries(Object.entries(deps).sort(([a], [b]) => (a < b ? -1 : 1))), engines: { node: '>=20' } };
+  if (pkg.scripts) pkg.scripts = dropServerSteps(pkg.scripts, serverDirsOf(await walk(d.critical, { ignoreFile: isRealEnv }))).scripts; // apps built before this fix still ship a `cd server` build
   if (!pkg.scripts?.build) pkg.scripts = { ...(pkg.scripts ?? {}), build: 'vite build' };
   add('package.json', json(pkg));
 
@@ -92,7 +99,7 @@ export async function assembleVercel(app) {
     'Everything the browser talks to goes through /api/compact (encrypted). Keep this repository private.',
     '',
   ].join('\n'));
-  return { files: [...out.values()], env, manifest };
+  return { files: [...out.values()], env, manifest, notes: vite.notes };
 }
 
 /** Publish the whole app (portal + critical + Compact runtime) as one repository ready for Vercel. */

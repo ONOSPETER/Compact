@@ -3,6 +3,8 @@ import path from 'node:path';
 import { CompactError } from '../errors.mjs';
 import { ensureDir, atomicWrite, writeJson, hashFiles, treeHash, walk, sha256Hex } from '../util/fs.mjs';
 import * as core from '../../templates/runtime/core.mjs';
+import { planViteConfig } from './viteconfig.mjs';
+import { dropServerSteps, serverDirsOf } from './scripts.mjs';
 
 const TEMPLATES = new URL('../../templates/runtime/', import.meta.url);
 const NOBLE = '^0.5.0';
@@ -66,6 +68,9 @@ function derivePackages({ pkg, plan, name }) {
     // Only drop scripts that launch a server file. Never build/dev/preview scripts.
     if (startsServer.test(v) && !/\bvite\b/.test(v) && criticalPaths.some((p) => v.includes(p))) { removedScripts.push(k); delete portalPkg.scripts[k]; }
   }
+  const fixed = dropServerSteps(portalPkg.scripts, serverDirsOf(criticalPaths)); // `cd server && npm run build` would fail on Vercel
+  if (portalPkg.scripts) portalPkg.scripts = fixed.scripts;
+  removedScripts.push(...fixed.dropped);
   portalPkg.dependencies = { ...(portalPkg.dependencies ?? {}), '@noble/post-quantum': NOBLE };
   const criticalPkg = {
     name: `${pkg.name || name}-critical`, version: pkg.version || '0.0.0', private: true,
@@ -113,7 +118,20 @@ export async function buildOutput({ srcDir, files, plan, pkg, staging, appId, na
   }
 
   // 3. package.json files, .gitignore
-  const { portalPkg, criticalPkg, removedScripts } = derivePackages({ pkg, plan, name });
+  const derived = derivePackages({ pkg, plan, name });
+  const { criticalPkg, removedScripts } = derived;
+  // A Vite portal without a React plugin renders a blank page (JSX compiled without React). Generate vite.config.ts when missing.
+  const rootFiles = (await fsp.readdir(P)).filter((n) => !n.startsWith('.'));
+  const vite = await planViteConfig({ rootFiles, pkg: derived.portalPkg, readFile: (n) => fsp.readFile(path.join(P, n), 'utf8') });
+  for (const f of vite.remove ?? []) await fsp.rm(path.join(P, f), { force: true });
+  if (vite.write) await fsp.writeFile(path.join(P, vite.write.path), vite.write.content);
+  notes.push(...vite.notes.map((n) => `portal: ${n}`));
+  const portalPkg = vite.pkg;
+  // FORCED_VITE_CONFIG: every portal gets this exact vite.config.ts at its root; the app's own config is kept as .orig
+  const FORCED_VITE_CONFIG = "import { defineConfig } from 'vite';\nimport react from '@vitejs/plugin-react';\n\nexport default defineConfig({\n  plugins: [react()],\n  build: {\n    outDir: 'dist',\n    sourcemap: true,\n  },\n});\n";
+  for (const f of rootFiles.filter((x) => /^vite\.config\.(js|mjs|cjs|ts|mts|cts)$/.test(x))) await fsp.rename(path.join(P, f), path.join(P, f + '.orig')).catch(() => {});
+  await fsp.writeFile(path.join(P, 'vite.config.ts'), FORCED_VITE_CONFIG);
+  if (!portalPkg.devDependencies?.['@vitejs/plugin-react'] && !portalPkg.dependencies?.['@vitejs/plugin-react']) portalPkg.devDependencies = { ...(portalPkg.devDependencies ?? {}), '@vitejs/plugin-react': '^4.3.4' };
   await writeJson(path.join(P, 'package.json'), portalPkg);
   await writeJson(path.join(C, 'package.json'), criticalPkg);
   if (removedScripts.length) notes.push(`removed server scripts from portal/package.json: ${removedScripts.join(', ')}`);

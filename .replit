@@ -1,11 +1,32 @@
+modules = ["python-3.11"]
 [nix]
 channel = "stable-25_05"
-packages = ["unzip", "nodejs_20"]
+packages = ["nodejs_20", "unzip"]
 
 [[ports]]
 localPort = 3001
 externalPort = 80
 
 [[ports]]
+localPort = 3002
+externalPort = 3002
+
+[[ports]]
 localPort = 8787
 externalPort = 3000
+
+[workflows]
+
+[[workflows.workflow]]
+name = "Start app"
+mode = "sequential"
+author = 67423951
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npm run ui"
+
+[deployment]
+deploymentTarget = "cloudrun"
+build = ["sh", "-c", "npm install && npm --prefix ui install && npm --prefix ui run build"]
+run = ["sh", "-c", "COMPACT_UI_HOST=0.0.0.0 COMPACT_UI_PORT=3001 node src/ui-server/server.mjs"]

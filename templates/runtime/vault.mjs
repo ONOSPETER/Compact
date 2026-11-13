@@ -90,15 +90,18 @@ export class VaultClient {
     return this.fetchImpl(this.endpoint + path, { method, headers: body === undefined ? {} : { 'content-type': raw ? 'application/octet-stream' : 'application/json' }, body: body === undefined ? undefined : raw ? body : JSON.stringify(body) });
   }
 
+  /** Server's own error text (our function answers JSON {error}); empty when the body is not ours (e.g. a Vercel 404 page). */
+  async #why(r) { try { const j = JSON.parse(await r.text()); return j?.error ? `: ${j.error}` : ''; } catch { return ' (not answered by the Compact function)'; } }
+
   async head() {
     const r = await this.#req('GET', `/v1/head/${await this.kid()}`);
     if (r.status === 404) return null;
-    if (!r.ok) throw new VaultError(`Could not read the vault head (${r.status})`, 'HTTP');
+    if (!r.ok) throw new VaultError(`Could not read the vault head (${r.status}${await this.#why(r)})`, 'HTTP');
     return r.json();
   }
   async #getBlob(id) {
     const r = await this.#req('GET', `/v1/blob/${id}`);
-    if (!r.ok) throw new VaultError(`Blob ${id.slice(0, 8)} is unavailable (${r.status})`, 'MISSING');
+    if (!r.ok) throw new VaultError(`Blob ${id.slice(0, 8)} is unavailable (${r.status}${await this.#why(r)})`, 'MISSING');
     const bytes = new Uint8Array(await r.arrayBuffer());
     if (core.hex(await core.sha256(bytes)) !== id) throw new VaultError('A blob does not match its hash: the host altered it', 'TAMPERED');
     return bytes;
@@ -106,7 +109,7 @@ export class VaultClient {
   async #putBlob(bytes) {
     const id = core.hex(await core.sha256(bytes));
     const r = await this.#req('PUT', '/v1/blob', bytes, true);
-    if (!r.ok) throw new VaultError(`Upload failed (${r.status})`, 'HTTP');
+    if (!r.ok) throw new VaultError(`Upload failed (${r.status}${await this.#why(r)})`, 'HTTP');
     if ((await r.json()).id !== id) throw new VaultError('The host returned a different blob id', 'TAMPERED');
     return id;
   }
@@ -120,7 +123,7 @@ export class VaultClient {
     const idxId = await this.#putBlob(await encryptRecord(this.key, 'index', te.enc(JSON.stringify({ v: 1, items }))));
     const r = await this.#req('PUT', `/v1/head/${await this.kid()}`, { n: cur.n + 1, id: idxId });
     if (r.status === 409) return false;
-    if (!r.ok) throw new VaultError(`Could not update the vault head (${r.status})`, 'HTTP');
+    if (!r.ok) throw new VaultError(`Could not update the vault head (${r.status}${await this.#why(r)})`, 'HTTP');
     return true;
   }
 
